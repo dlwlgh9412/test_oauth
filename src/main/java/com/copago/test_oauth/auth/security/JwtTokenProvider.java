@@ -2,9 +2,12 @@ package com.copago.test_oauth.auth.security;
 
 
 import com.copago.test_oauth.auth.config.AppProperties;
+import com.copago.test_oauth.auth.service.CustomUserDetailService;
 import io.jsonwebtoken.*;
+import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
 import io.jsonwebtoken.security.SignatureException;
+import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,10 +19,10 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import javax.crypto.SecretKey;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Date;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -27,59 +30,79 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class JwtTokenProvider {
     private final AppProperties appProperties;
+    private final CustomUserDetailService userDetailsService;
 
     private static final String AUTHORITIES_KEY = "auth";
+    private static final String JWT_ID_KEY = "jti";
+    private static final String TOKEN_TYPE_KEY = "typ";
     private static final String BEARER_PREFIX = "Bearer ";
     private static final String AUTHORIZATION_HEADER = "Authorization";
 
+    private SecretKey signingKey;
+
+    @PostConstruct
+    public void init() {
+        byte[] keyBytes = Decoders.BASE64.decode(appProperties.getAuth().getTokenSecret());
+        this.signingKey = Keys.hmacShaKeyFor(keyBytes);
+        log.info("JWT signing key initialized");
+    }
+
     public String createToken(Authentication authentication) {
         UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
+        return createToken(userPrincipal);
+    }
 
-        String authorities = authentication.getAuthorities().stream()
+    public String createTokenForUser(Long userId) {
+        UserPrincipal userPrincipal = (UserPrincipal) userDetailsService.loadUserById(userId);
+        return createToken(userPrincipal);
+    }
+
+    private String createToken(UserPrincipal userPrincipal) {
+        String authorities = userPrincipal.getAuthorities().stream()
                 .map(GrantedAuthority::getAuthority)
                 .collect(Collectors.joining(","));
 
         Date now = new Date();
-        Date expiryDate = new Date(now.getTime() + appProperties.getAuth().getTokenExpirationMsec());
+        Date expiryDate = new Date(now.getTime() + appProperties.getAuth().getAccessTokenExpiration());
 
         return Jwts.builder()
                 .subject(Long.toString(userPrincipal.getId()))
                 .claim("email", userPrincipal.getEmail())
                 .claim(AUTHORITIES_KEY, authorities)
+                .claim(TOKEN_TYPE_KEY, "access")
+                .claim(JWT_ID_KEY, UUID.randomUUID().toString())
                 .issuedAt(now)
                 .expiration(expiryDate)
-                .signWith(getSigningKey())
+                .signWith(signingKey, Jwts.SIG.HS512)
                 .compact();
     }
 
     public String createRefreshToken(Long userId) {
         Date now = new Date();
-        Date expiryDate = new Date(now.getTime() + appProperties.getAuth().getRefreshTokenExpirationMsec());
+        Date expiryDate = new Date(now.getTime() + appProperties.getAuth().getRefreshTokenExpiration());
 
         return Jwts.builder()
                 .subject(Long.toString(userId))
+                .claim(TOKEN_TYPE_KEY, "refresh")
+                .claim(JWT_ID_KEY, UUID.randomUUID().toString())
                 .issuedAt(now)
                 .expiration(expiryDate)
-                .signWith(getSigningKey())
+                .signWith(signingKey, Jwts.SIG.HS512)
                 .compact();
     }
 
     public Long getUserIdFromToken(String token) {
-        Claims claims = Jwts.parser()
-                .verifyWith(getSigningKey())
-                .build()
-                .parseSignedClaims(token)
-                .getPayload();
-
+        Claims claims = parseToken(token);
         return Long.parseLong(claims.getSubject());
     }
 
+    public Long getUserIdFromAuthentication(Authentication authentication) {
+        UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
+        return userPrincipal.getId();
+    }
+
     public Authentication getAuthentication(String token) {
-        Claims claims = Jwts.parser()
-                .verifyWith(getSigningKey())
-                .build()
-                .parseSignedClaims(token)
-                .getPayload();
+        Claims claims = parseToken(token);
 
         Collection<? extends GrantedAuthority> authorities =
                 Arrays.stream(claims.get(AUTHORITIES_KEY).toString().split(","))
@@ -96,7 +119,7 @@ public class JwtTokenProvider {
 
     public boolean validateToken(String token) {
         try {
-            Jwts.parser().verifyWith(getSigningKey()).build().parseSignedClaims(token);
+            parseToken(token);
             return true;
         } catch (SignatureException ex) {
             log.error("Invalid JWT signature");
@@ -106,6 +129,8 @@ public class JwtTokenProvider {
             log.error("Expired JWT token");
         } catch (UnsupportedJwtException ex) {
             log.error("Unsupported JWT token");
+        } catch (JwtException ex) {
+            log.error("JWT token validation failed", ex);
         } catch (IllegalArgumentException ex) {
             log.error("JWT claims string is empty");
         }
@@ -120,8 +145,32 @@ public class JwtTokenProvider {
         return null;
     }
 
-    private SecretKey getSigningKey() {
-        byte[] keyBytes = appProperties.getAuth().getTokenSecret().getBytes(StandardCharsets.UTF_8);
-        return Keys.hmacShaKeyFor(keyBytes);
+    private Claims parseToken(String token) {
+        try {
+            Claims claims = Jwts.parser()
+                    .verifyWith(signingKey)
+                    .build()
+                    .parseSignedClaims(token)
+                    .getPayload();
+
+            // 디버깅용 로그
+            log.debug("Token subject: {}", claims.getSubject());
+            log.debug("Token claims: {}", claims.entrySet().stream()
+                    .map(e -> e.getKey() + "=" + e.getValue())
+                    .collect(Collectors.joining(", ")));
+
+            return claims;
+        } catch (Exception e) {
+            log.error("Failed to parse token: {}", e.getMessage());
+            throw e;
+        }
+    }
+
+    public int getAccessTokenExpirationSeconds() {
+        return (int) (appProperties.getAuth().getAccessTokenExpiration() / 1000);
+    }
+
+    public long getRefreshTokenExpirationMs() {
+        return appProperties.getAuth().getRefreshTokenExpiration();
     }
 }

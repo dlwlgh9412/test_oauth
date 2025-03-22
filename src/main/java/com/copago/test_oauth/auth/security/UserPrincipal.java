@@ -38,12 +38,15 @@ public class UserPrincipal implements OAuth2User, UserDetails {
     }
 
     public static UserPrincipal create(User user, Map<String, Object> attributes) {
-        UserPrincipal userPrincipal = UserPrincipal.create(user);
+        List<GrantedAuthority> authorities = user.getRoles().stream()
+                .map(role -> new SimpleGrantedAuthority(role.getName().name()))
+                .collect(Collectors.toList());
+
         return new UserPrincipal(
-                userPrincipal.getId(),
-                userPrincipal.getEmail(),
-                userPrincipal.getPassword(),
-                userPrincipal.getAuthorities(),
+                user.getId(),
+                user.getEmail(),
+                user.getPassword(),
+                authorities,
                 attributes
         );
     }

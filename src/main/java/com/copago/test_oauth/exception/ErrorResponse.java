@@ -1,4 +1,4 @@
-package com.copago.test_oauth.auth.dto;
+package com.copago.test_oauth.exception;
 
 import lombok.AllArgsConstructor;
 import lombok.Getter;

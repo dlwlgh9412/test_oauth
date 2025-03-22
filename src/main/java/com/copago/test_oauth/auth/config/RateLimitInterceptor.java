@@ -1,6 +1,6 @@
 package com.copago.test_oauth.auth.config;
 
-import com.copago.test_oauth.auth.dto.ErrorResponse;
+import com.copago.test_oauth.exception.ErrorResponse;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;

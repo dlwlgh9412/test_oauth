@@ -5,6 +5,7 @@ import com.copago.test_oauth.auth.domain.token.RefreshToken;
 import com.copago.test_oauth.auth.repository.RefreshTokenRepository;
 import com.copago.test_oauth.auth.util.CookieUtils;
 import com.copago.test_oauth.auth.util.RedirectUriValidator;
+import com.copago.test_oauth.util.NetworkUtils;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
@@ -51,7 +52,6 @@ public class OAuth2AuthenticationSuccessHandler extends SimpleUrlAuthenticationS
         Optional<String> redirectUri = CookieUtils.getCookie(request, REDIRECT_URI_COOKIE_NAME)
                 .map(Cookie::getValue);
 
-        // 리다이렉트 URI가 없거나 유효하지 않으면 기본 URL 사용
         if (redirectUri.isPresent() && !redirectUriValidator.isValidRedirectUri(redirectUri.get())) {
             log.warn("Invalid redirect URI detected: {}", redirectUri.get());
             throw new IllegalArgumentException("Invalid redirect URI");
@@ -87,7 +87,7 @@ public class OAuth2AuthenticationSuccessHandler extends SimpleUrlAuthenticationS
         CookieUtils.addCookie(response,
                 appProperties.getAuth().getTokenCookieName(),
                 token,
-                (int) TimeUnit.MILLISECONDS.toSeconds(appProperties.getAuth().getTokenExpirationMsec()),
+                (int) TimeUnit.MILLISECONDS.toSeconds(appProperties.getAuth().getAccessTokenExpiration()),
                 true,       // httpOnly
                 false,       // secure (HTTPS 환경에서만)
                 "Strict",   // SameSite policy
@@ -97,7 +97,7 @@ public class OAuth2AuthenticationSuccessHandler extends SimpleUrlAuthenticationS
         CookieUtils.addCookie(response,
                 appProperties.getAuth().getRefreshTokenCookieName(),
                 refreshToken,
-                (int) TimeUnit.MILLISECONDS.toSeconds(appProperties.getAuth().getRefreshTokenExpirationMsec()),
+                (int) TimeUnit.MILLISECONDS.toSeconds(appProperties.getAuth().getRefreshTokenExpiration()),
                 true,
                 false,
                 "Strict",
@@ -105,7 +105,7 @@ public class OAuth2AuthenticationSuccessHandler extends SimpleUrlAuthenticationS
     }
 
     private void saveRefreshToken(Long userId, String token, HttpServletRequest request) {
-        String ipAddress = getClientIpAddress(request);
+        String ipAddress = NetworkUtils.getClientIpAddress(request);
         String userAgent = request.getHeader("User-Agent");
 
         RefreshToken refreshToken = RefreshToken.builder()
@@ -113,19 +113,9 @@ public class OAuth2AuthenticationSuccessHandler extends SimpleUrlAuthenticationS
                 .token(token)
                 .ipAddress(ipAddress)
                 .userAgent(userAgent)
-                .expiryDate(Instant.now().plusMillis(appProperties.getAuth().getRefreshTokenExpirationMsec()))
+                .expiryDate(Instant.now().plusMillis(appProperties.getAuth().getRefreshTokenExpiration()))
                 .build();
 
         refreshTokenRepository.save(refreshToken);
-    }
-
-    // IP 주소를 추출하는 개선된 메서드 (프록시/로드밸런서 고려)
-    private String getClientIpAddress(HttpServletRequest request) {
-        String xForwardedFor = request.getHeader("X-Forwarded-For");
-        if (xForwardedFor != null && !xForwardedFor.isEmpty()) {
-            // X-Forwarded-For 헤더가 있으면 첫 번째 IP 사용
-            return xForwardedFor.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
     }
 }

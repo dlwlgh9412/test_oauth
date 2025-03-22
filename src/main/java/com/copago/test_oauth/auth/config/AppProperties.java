@@ -21,8 +21,8 @@ public class AppProperties {
     public static class Auth {
         // JWT 토큰 설정
         private String tokenSecret;
-        private long tokenExpirationMsec = 864000000; // 10일
-        private long refreshTokenExpirationMsec = 2592000000L; // 30일
+        private long accessTokenExpiration;
+        private long refreshTokenExpiration;
 
         // 토큰 쿠키 사용 여부 및 설정
         private boolean useTokenCookie = false;
